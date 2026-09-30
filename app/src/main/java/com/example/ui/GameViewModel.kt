@@ -202,24 +202,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (selectedWord.id == state.targetWord.id) {
             // Correct!
             _gamePlayState.value = state.copy(isAnsweringCorrect = true)
-            voicePlayer.speakSuccessCheer(state.targetWord.english, state.targetWord.chinese)
-
-            viewModelScope.launch {
-                delay(1800)
+            voicePlayer.handleCorrectChoice(state.targetWord.english, state.targetWord.chinese) {
                 advanceToNextQuestionOrFinish()
             }
         } else {
-            // Wrong option
+            // Wrong option: sequence: error tone -> gentle hint -> pronounce tapped option cleanly
             _gamePlayState.value = state.copy(
                 wrongAttemptsInQuestion = state.wrongAttemptsInQuestion + 1,
                 totalMistakesInLevel = state.totalMistakesInLevel + 1
             )
-            voicePlayer.speakEncourage()
-            // Also speak the touched word so child learns what that one was!
-            viewModelScope.launch {
-                delay(1000)
-                voicePlayer.speakEnglishWord(selectedWord.english, selectedWord.chinese)
-            }
+            voicePlayer.handleWrongChoice(selectedWord.english, selectedWord.chinese)
         }
     }
 
@@ -241,10 +233,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 bubbles = updatedBubbles,
                 isAnsweringCorrect = true
             )
-            voicePlayer.speakSuccessCheer(state.targetWord.english, state.targetWord.chinese)
-
-            viewModelScope.launch {
-                delay(1800)
+            voicePlayer.handleCorrectChoice(state.targetWord.english, state.targetWord.chinese) {
                 advanceToNextQuestionOrFinish()
             }
         } else {
@@ -257,7 +246,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 wrongAttemptsInQuestion = state.wrongAttemptsInQuestion + 1,
                 totalMistakesInLevel = state.totalMistakesInLevel + 1
             )
-            voicePlayer.speakEnglishWord(bubble.word.english, bubble.word.chinese)
+            voicePlayer.handleWrongChoice(bubble.word.english, bubble.word.chinese)
         }
     }
 
@@ -288,19 +277,19 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             _gamePlayState.value = state.copy(flipCards = updated, firstFlippedCardId = null)
 
             viewModelScope.launch {
-                delay(700)
+                delay(600)
                 if (firstCard.word.id == card.word.id) {
                     // Match!
-                    voicePlayer.speakSuccessCheer(card.word.english, card.word.chinese)
                     val matchedList = updated.map {
                         if (it.cardId == firstId || it.cardId == cardId) it.copy(isMatched = true) else it
                     }
                     val allMatched = matchedList.all { it.isMatched }
                     _gamePlayState.value = _gamePlayState.value?.copy(flipCards = matchedList)
 
-                    if (allMatched) {
-                        delay(1200)
-                        finishCurrentLevel()
+                    voicePlayer.handleCorrectChoice(card.word.english, card.word.chinese) {
+                        if (allMatched) {
+                            finishCurrentLevel()
+                        }
                     }
                 } else {
                     // Mismatch, turn back
@@ -313,6 +302,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         flipCards = turnedBack,
                         totalMistakesInLevel = (_gamePlayState.value?.totalMistakesInLevel ?: 0) + 1
                     )
+                    voicePlayer.handleWrongChoice(card.word.english, card.word.chinese)
                 }
             }
         }
@@ -372,8 +362,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             repository.completeLevel(state.levelConfig.levelNumber, stars, score)
-            delay(500)
-            voicePlayer.speakSuccessCheer("Victory! Level Cleared!", "闯关成功！获得 ${stars} 颗金星和新贴纸！")
+            delay(400)
+            voicePlayer.speakEnglishWord("Victory! Level Cleared!", "闯关成功！获得 ${stars} 颗金星和新贴纸！")
         }
     }
 
