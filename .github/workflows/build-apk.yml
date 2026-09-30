@@ -27,18 +27,36 @@ jobs:
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
 
-      # 4. 环境准备：还原 debug.keystore 与 .env 配置文件
+      # 4. 环境准备：还原或自动生成 debug.keystore 与 .env 配置文件
       - name: Prepare Build Environment
         run: |
-          # 还原 debug 签名密钥
+          # 1. 优先尝试从 debug.keystore.base64 解码还原
           if [ -f "debug.keystore.base64" ]; then
-            base64 -d debug.keystore.base64 > debug.keystore
+            base64 -d debug.keystore.base64 > debug.keystore 2>/dev/null || true
           fi
-          # 确保环境变量配置文件存在
+
+          # 2. 若文件不存在或为空，使用 keytool 自动生成标准 debug.keystore（双重兜底，绝不报错）
+          if [ ! -s "debug.keystore" ]; then
+            echo "debug.keystore not found, generating with keytool..."
+            keytool -genkeypair -v -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+          # 3. 校验 keystore 存在
+          ls -la debug.keystore
+
+          # 4. 确保环境变量配置文件存在
           if [ ! -f ".env" ] && [ -f ".env.example" ]; then
             cp .env.example .env
           fi
-          # 赋予 Gradle 包装器执行权限
+
+          # 5. 赋予 Gradle 包装器执行权限
           chmod +x ./gradlew
 
       # 5. 使用 Gradle 编译 Debug APK
