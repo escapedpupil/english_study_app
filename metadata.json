@@ -1,0 +1,6 @@
+{
+  "name": "萌宝英语岛",
+  "description": "专为学龄前零基础中国小朋友打造的趣味英语启蒙闯关益智游戏，纯语音引导与听音互动，丰富关卡与贴纸收集。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
