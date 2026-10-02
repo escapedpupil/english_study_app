@@ -86,6 +86,7 @@ fun GamePlayScreen(
     isSpeaking: Boolean,
     onBack: () -> Unit,
     onSpeakerClick: () -> Unit,
+    onRepeatWordClick: () -> Unit,
     onSelectOption: (EnglishWord) -> Unit,
     onPopBubble: (BubbleItem) -> Unit,
     onFlipCard: (Int) -> Unit,
@@ -181,11 +182,11 @@ fun GamePlayScreen(
                 }
             }
 
-            // Bottom repeat speaker prompt bar
+            // Bottom repeat speaker prompt bar (only speaks pure English & Chinese word)
             BottomAudioHelperBar(
                 targetWord = targetWord,
                 isSpeaking = isSpeaking,
-                onSpeakerClick = onSpeakerClick
+                onSpeakerClick = onRepeatWordClick
             )
         }
 
@@ -448,12 +449,12 @@ private fun ShadowGuessArena(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // 3 Candidate options
+        // Candidate options
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            options.take(3).forEach { option ->
+            options.forEach { option ->
                 Box(modifier = Modifier.weight(1f)) {
                     WordCardItem(
                         word = option,

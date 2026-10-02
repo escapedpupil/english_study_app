@@ -78,6 +78,9 @@ fun KidEnglishApp(
                         onSpeakerClick = {
                             viewModel.speakCurrentQuestion()
                         },
+                        onRepeatWordClick = {
+                            viewModel.repeatTargetWord()
+                        },
                         onSelectOption = { word ->
                             viewModel.selectOption(word)
                         },

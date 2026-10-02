@@ -12,6 +12,7 @@ import com.example.model.EnglishWord
 import com.example.model.GameModeType
 import com.example.model.LevelConfig
 import com.example.model.LevelDefinitions
+import com.example.model.WordCategory
 import com.example.model.WordRepository
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,8 +47,9 @@ data class FlipCardItem(
 data class GamePlayState(
     val levelConfig: LevelConfig,
     val questionIndex: Int = 0,
-    val totalQuestions: Int = 5,
+    val totalQuestions: Int = 8,
     val targetWord: EnglishWord,
+    val questionWordIds: List<String> = emptyList(),
     val options: List<EnglishWord> = emptyList(),
     val bubbles: List<BubbleItem> = emptyList(),
     val flipCards: List<FlipCardItem> = emptyList(),
@@ -108,41 +110,56 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun setupNewLevel(levelConfig: LevelConfig) {
         val levelWords = levelConfig.wordIds.mapNotNull { WordRepository.getWordById(it) }
-        val pool = if (levelWords.isNotEmpty()) levelWords else WordRepository.allWords.take(4)
-        val target = pool.random()
+        val categoryWords = WordRepository.allWords.filter { it.category == (levelWords.firstOrNull()?.category ?: WordCategory.ANIMALS) }
+        val combinedPool = (levelWords + categoryWords + WordRepository.allWords).distinctBy { it.id }
+
+        // Pick 8 targets without duplicates for rich randomness
+        val questionTargetWords = (levelWords.shuffled() + combinedPool.shuffled()).distinctBy { it.id }.take(8)
+        val firstTarget = questionTargetWords.first()
+        val optionCount = if (levelConfig.defaultMode == GameModeType.SHADOW_GUESS) 3 else 4
 
         val state = GamePlayState(
             levelConfig = levelConfig,
             questionIndex = 0,
-            totalQuestions = minOf(5, maxOf(3, pool.size + 1)),
-            targetWord = target,
-            options = generateOptions(target, pool),
-            bubbles = generateBubbles(target, pool),
-            flipCards = generateFlipCards(pool.take(4))
+            totalQuestions = questionTargetWords.size,
+            targetWord = firstTarget,
+            questionWordIds = questionTargetWords.map { it.id },
+            options = generateOptions(firstTarget, combinedPool, optionCount),
+            bubbles = generateBubbles(firstTarget, combinedPool),
+            flipCards = generateFlipCards(questionTargetWords.take(4))
         )
         _gamePlayState.value = state
 
         // Play introduction audio
         viewModelScope.launch {
             delay(400)
-            speakCurrentQuestion(target, levelConfig.defaultMode)
+            speakCurrentQuestion(firstTarget, levelConfig.defaultMode)
         }
     }
 
-    private fun generateOptions(target: EnglishWord, pool: List<EnglishWord>): List<EnglishWord> {
-        val otherWords = WordRepository.allWords.filter { it.id != target.id }.shuffled()
-        val poolOthers = pool.filter { it.id != target.id }
-        val candidates = (poolOthers + otherWords).distinctBy { it.id }.take(3)
-        return (candidates + target).shuffled()
+    private fun generateOptions(target: EnglishWord, pool: List<EnglishWord>, count: Int = 4): List<EnglishWord> {
+        val poolOthers = pool.filter { it.id != target.id }.shuffled()
+        val categoryOthers = WordRepository.allWords.filter { it.id != target.id && it.category == target.category }.shuffled()
+        val allOthers = WordRepository.allWords.filter { it.id != target.id }.shuffled()
+
+        val candidates = (poolOthers + categoryOthers + allOthers).distinctBy { it.id }.take(count - 1)
+        val finalOptions = (candidates + target).shuffled()
+
+        // Strict guarantee: target is always present in final list
+        return if (finalOptions.any { it.id == target.id }) {
+            finalOptions
+        } else {
+            (finalOptions.take(count - 1) + target).shuffled()
+        }
     }
 
     private fun generateBubbles(target: EnglishWord, pool: List<EnglishWord>): List<BubbleItem> {
-        val options = generateOptions(target, pool)
+        val options = generateOptions(target, pool, count = 4)
         val positions = listOf(
-            0.2f to 0.25f,
-            0.7f to 0.28f,
-            0.35f to 0.55f,
-            0.75f to 0.62f
+            0.18f to 0.20f,
+            0.66f to 0.22f,
+            0.22f to 0.56f,
+            0.64f to 0.58f
         ).shuffled()
 
         return options.mapIndexed { index, word ->
@@ -187,6 +204,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Speaks ONLY the English word and Chinese name (e.g. "Cat. 猫咪。"),
+     * without re-reading the question instruction.
+     */
     fun repeatTargetWord() {
         val state = _gamePlayState.value ?: return
         voicePlayer.speakEnglishWord(state.targetWord.english, state.targetWord.chinese)
@@ -312,19 +333,22 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val state = _gamePlayState.value ?: return
         val nextIndex = state.questionIndex + 1
 
-        if (nextIndex >= state.totalQuestions) {
+        if (nextIndex >= state.totalQuestions || nextIndex >= state.questionWordIds.size) {
             finishCurrentLevel()
         } else {
+            val nextTargetId = state.questionWordIds[nextIndex]
+            val nextTarget = WordRepository.getWordById(nextTargetId) ?: WordRepository.allWords.random()
+
             val levelWords = state.levelConfig.wordIds.mapNotNull { WordRepository.getWordById(it) }
-            val pool = if (levelWords.isNotEmpty()) levelWords else WordRepository.allWords.take(4)
-            val otherTargets = pool.filter { it.id != state.targetWord.id }
-            val nextTarget = if (otherTargets.isNotEmpty()) otherTargets.random() else pool.random()
+            val categoryWords = WordRepository.allWords.filter { it.category == nextTarget.category }
+            val combinedPool = (levelWords + categoryWords + WordRepository.allWords).distinctBy { it.id }
+            val optionCount = if (state.levelConfig.defaultMode == GameModeType.SHADOW_GUESS) 3 else 4
 
             val nextState = state.copy(
                 questionIndex = nextIndex,
                 targetWord = nextTarget,
-                options = generateOptions(nextTarget, pool),
-                bubbles = generateBubbles(nextTarget, pool),
+                options = generateOptions(nextTarget, combinedPool, optionCount),
+                bubbles = generateBubbles(nextTarget, combinedPool),
                 isAnsweringCorrect = false,
                 wrongAttemptsInQuestion = 0
             )
@@ -341,8 +365,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val state = _gamePlayState.value ?: return
         val mistakes = state.totalMistakesInLevel
         val stars = when {
-            mistakes == 0 -> 3
-            mistakes <= 2 -> 2
+            mistakes <= 1 -> 3
+            mistakes <= 3 -> 2
             else -> 1
         }
         val score = (stars * 100) - (mistakes * 10)
