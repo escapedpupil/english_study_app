@@ -190,16 +190,32 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         when (currentMode) {
             GameModeType.POP_BUBBLE -> {
-                voicePlayer.speakQuestionPrompt(currentTarget.english, "快戳破 ${currentTarget.chinese} 泡泡")
+                // Bubble pop mode: strictly no "找一找"
+                voicePlayer.speakQuestionPrompt(
+                    chineseInstruction = "快戳破 ${currentTarget.chinese} 泡泡！",
+                    englishPrompt = "Pop the ${currentTarget.english}! ... ${currentTarget.english}!"
+                )
             }
             GameModeType.SHADOW_GUESS -> {
-                voicePlayer.speakQuestionPrompt(currentTarget.english, "这是谁的影子呢？快找到 ${currentTarget.chinese}")
+                // Shadow guess mode: strictly no "找一找"
+                voicePlayer.speakQuestionPrompt(
+                    chineseInstruction = "这是谁的影子呢？快认出 ${currentTarget.chinese}！",
+                    englishPrompt = "Look at the shadow! ... It's ${currentTarget.english}! ... ${currentTarget.english}!"
+                )
             }
             GameModeType.CARD_FLIP -> {
-                voicePlayer.speakEnglishWord(currentTarget.english, "翻一翻，帮 ${currentTarget.chinese} 找到好朋友")
+                // Card flip mode
+                voicePlayer.speakQuestionPrompt(
+                    chineseInstruction = "翻一翻卡片，找出 ${currentTarget.chinese} 的好朋友！",
+                    englishPrompt = "Find the ${currentTarget.english}! ... ${currentTarget.english}!"
+                )
             }
             GameModeType.LISTEN_AND_PICK -> {
-                voicePlayer.speakQuestionPrompt(currentTarget.english, currentTarget.chinese, currentTarget.soundHint)
+                // Listen & Pick mode
+                voicePlayer.speakQuestionPrompt(
+                    chineseInstruction = "找一找，${currentTarget.chinese} 在哪里呢？",
+                    englishPrompt = "Find the ${currentTarget.english}! ... ${currentTarget.english}!"
+                )
             }
         }
     }

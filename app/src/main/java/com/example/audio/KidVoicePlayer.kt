@@ -9,6 +9,7 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.speech.tts.Voice
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -60,6 +61,7 @@ class KidVoicePlayer(private val context: Context) : TextToSpeech.OnInitListener
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
             isTtsReady = true
+            selectOptimalVoice()
             tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {
                     _isSpeaking.value = true
@@ -83,15 +85,37 @@ class KidVoicePlayer(private val context: Context) : TextToSpeech.OnInitListener
         }
     }
 
+    private fun selectOptimalVoice() {
+        try {
+            val voices = tts?.voices ?: return
+            val usVoices = voices.filter { it.locale.language == "en" && it.locale.country == "US" }
+            if (usVoices.isEmpty()) return
+
+            val preferredVoice = usVoices.firstOrNull { voice ->
+                !voice.isNetworkConnectionRequired &&
+                (voice.name.contains("natural", ignoreCase = true) ||
+                 voice.name.contains("female", ignoreCase = true) ||
+                 voice.name.contains("sfg", ignoreCase = true) ||
+                 voice.quality >= Voice.QUALITY_HIGH)
+            } ?: usVoices.firstOrNull { !it.isNetworkConnectionRequired }
+              ?: usVoices.firstOrNull()
+
+            if (preferredVoice != null) {
+                tts?.voice = preferredVoice
+            }
+        } catch (e: Exception) {
+            Log.w("KidVoicePlayer", "Voice setup fallback", e)
+        }
+    }
+
     /**
      * Speaks a single utterance and awaits its real completion from the TTS engine.
-     * Guarantees no cutting off.
      */
     private suspend fun speakTextAndWait(
         text: String,
         locale: Locale,
-        speechRate: Float = 0.78f,
-        pitch: Float = 1.0f
+        speechRate: Float = 0.75f,
+        pitch: Float = 1.02f
     ): Boolean {
         if (!isTtsReady || tts == null) return false
 
@@ -109,6 +133,9 @@ class KidVoicePlayer(private val context: Context) : TextToSpeech.OnInitListener
 
             try {
                 tts?.language = locale
+                if (locale.language == "en") {
+                    selectOptimalVoice()
+                }
                 tts?.setSpeechRate(speechRate)
                 tts?.setPitch(pitch)
                 val res = tts?.speak(text, TextToSpeech.QUEUE_ADD, null, id)
@@ -124,7 +151,45 @@ class KidVoicePlayer(private val context: Context) : TextToSpeech.OnInitListener
     }
 
     /**
-     * Speak an English word clearly with clean pronunciation and optional Chinese meaning.
+     * Appends a silent buffer to keep the audio channel open and prevent abrupt cutoff of consonant tails.
+     */
+    private suspend fun playSilentBuffer(durationMs: Long = 400L) {
+        if (!isTtsReady || tts == null) {
+            delay(durationMs)
+            return
+        }
+
+        suspendCancellableCoroutine { continuation ->
+            val id = "silent_${utteranceCounter.incrementAndGet()}"
+            utteranceCallbacks[id] = {
+                if (continuation.isActive) continuation.resume(true)
+            }
+            continuation.invokeOnCancellation {
+                utteranceCallbacks.remove(id)
+            }
+            try {
+                val res = tts?.playSilentUtterance(durationMs, TextToSpeech.QUEUE_ADD, id)
+                if (res != TextToSpeech.SUCCESS) {
+                    utteranceCallbacks.remove(id)
+                    if (continuation.isActive) continuation.resume(false)
+                }
+            } catch (e: Exception) {
+                utteranceCallbacks.remove(id)
+                if (continuation.isActive) continuation.resume(false)
+            }
+        }
+    }
+
+    /**
+     * Speaks English with natural, human-like cadence and appends tail silence to ensure full pronunciation.
+     */
+    private suspend fun speakEnglishPromptAndWait(englishText: String) {
+        speakTextAndWait(englishText, Locale.US, speechRate = 0.74f, pitch = 1.03f)
+        playSilentBuffer(400L)
+    }
+
+    /**
+     * Speak an English word clearly with friendly tone, clean repetition, and optional Chinese meaning.
      */
     fun speakEnglishWord(english: String, chinese: String = "") {
         currentSpeechJob?.cancel()
@@ -133,14 +198,14 @@ class KidVoicePlayer(private val context: Context) : TextToSpeech.OnInitListener
                 tts?.stop()
                 _isSpeaking.value = true
 
-                // Speak English with clear child-learning pace and punctuation to prevent truncation
-                speakTextAndWait("$english.", Locale.US, speechRate = 0.78f, pitch = 1.0f)
-                delay(300) // Natural breath pause
+                // Conversational repetition: e.g. "Apple... Apple!"
+                speakEnglishPromptAndWait("$english... $english!")
+                delay(300)
 
                 if (chinese.isNotEmpty() && hasChineseSupport()) {
                     speakTextAndWait(chinese, Locale.CHINESE, speechRate = 0.95f, pitch = 1.05f)
+                    playSilentBuffer(250L)
                 }
-                delay(150)
             } catch (_: CancellationException) {
             } finally {
                 _isSpeaking.value = false
@@ -149,24 +214,28 @@ class KidVoicePlayer(private val context: Context) : TextToSpeech.OnInitListener
     }
 
     /**
-     * Spoken prompt for a question:
-     * e.g. "找一找，小猫咪在哪里呢？" -> pause -> "Cat!"
+     * Spoken prompt for a question with specific Chinese instruction and vivid human-like English prompt.
+     * Guarantees NO accidental "找一找" prefix on non-matching levels!
      */
-    fun speakQuestionPrompt(english: String, chinese: String, soundHint: String = "") {
+    fun speakQuestionPrompt(
+        chineseInstruction: String,
+        englishPrompt: String
+    ) {
         currentSpeechJob?.cancel()
         currentSpeechJob = scope.launch {
             try {
                 tts?.stop()
                 _isSpeaking.value = true
 
-                if (hasChineseSupport()) {
-                    speakTextAndWait("找一找，$chinese。", Locale.CHINESE, speechRate = 0.95f, pitch = 1.05f)
-                    delay(250)
+                // 1. Chinese instruction
+                if (hasChineseSupport() && chineseInstruction.isNotEmpty()) {
+                    speakTextAndWait(chineseInstruction, Locale.CHINESE, speechRate = 0.95f, pitch = 1.05f)
+                    delay(350)
                 }
 
-                // Speak English target word clearly
-                speakTextAndWait("$english.", Locale.US, speechRate = 0.78f, pitch = 1.0f)
-                delay(150)
+                // 2. Human-like English prompt with warm cadence and complete pronunciation
+                speakEnglishPromptAndWait(englishPrompt)
+                delay(250)
             } catch (_: CancellationException) {
             } finally {
                 _isSpeaking.value = false
@@ -176,9 +245,9 @@ class KidVoicePlayer(private val context: Context) : TextToSpeech.OnInitListener
 
     /**
      * When user selects the wrong option:
-     * 1. First: play error sound effect (嘟嘟提示音) + gentle vibration.
-     * 2. After tone finishes: speak gentle Chinese prompt ("再试一次哦~") and WAIT until finished.
-     * 3. Then: speak the touched option's English word and Chinese clearly ("这是: Dog. 小狗").
+     * 1. Play error sound effect (嘟嘟提示音) + gentle vibration.
+     * 2. Wait until tone finishes, then speak gentle reminder ("再试一次哦~").
+     * 3. Speak the touched option's English and Chinese clearly ("This is: Dog... Dog! 小狗").
      */
     fun handleWrongChoice(selectedEnglish: String, selectedChinese: String) {
         currentSpeechJob?.cancel()
@@ -190,30 +259,29 @@ class KidVoicePlayer(private val context: Context) : TextToSpeech.OnInitListener
                 // 1. Play wrong hint tone and vibration first
                 playTryAgainTone()
                 vibrateGentle()
-                delay(400) // Wait for tone to finish
+                delay(400)
 
                 // 2. Play gentle reminder speech
                 if (hasChineseSupport()) {
-                    val prompt = listOf("再试一次哦~", "不对哦，看看是哪个？", "别灰心，再找找~").random()
+                    val prompt = listOf("再试一次哦~", "不对哦，再看看呢？", "别灰心，再找找看~").random()
                     speakTextAndWait(prompt, Locale.CHINESE, speechRate = 0.95f, pitch = 1.05f)
-                    delay(300) // Wait for prompt to finish completely
+                    delay(300)
                 }
 
                 // 3. Pronounce the selected wrong item so toddler learns what they tapped
                 if (hasChineseSupport()) {
-                    speakTextAndWait("这个是", Locale.CHINESE, speechRate = 1.0f, pitch = 1.0f)
-                    delay(150)
+                    speakTextAndWait("这个是", Locale.CHINESE, speechRate = 1.0f, pitch = 1.05f)
+                    delay(200)
                 }
 
-                // Pronounce English word cleanly with full clarity
-                speakTextAndWait("$selectedEnglish.", Locale.US, speechRate = 0.78f, pitch = 1.0f)
+                // Speak English clearly with full syllable pronunciation
+                speakEnglishPromptAndWait("$selectedEnglish... $selectedEnglish!")
 
                 if (selectedChinese.isNotEmpty() && hasChineseSupport()) {
-                    delay(250)
+                    delay(300)
                     speakTextAndWait(selectedChinese, Locale.CHINESE, speechRate = 0.95f, pitch = 1.05f)
+                    playSilentBuffer(250L)
                 }
-
-                delay(200)
             } catch (_: CancellationException) {
             } finally {
                 _isSpeaking.value = false
@@ -243,12 +311,12 @@ class KidVoicePlayer(private val context: Context) : TextToSpeech.OnInitListener
                 val cheer = listOf("太棒啦！答对了！", "哇！真厉害！", "太聪明了！").random()
                 if (hasChineseSupport()) {
                     speakTextAndWait(cheer, Locale.CHINESE, speechRate = 1.0f, pitch = 1.1f)
-                    delay(250)
+                    delay(300)
                 }
 
-                // Reinforce English target word
-                speakTextAndWait("$targetEnglish.", Locale.US, speechRate = 0.78f, pitch = 1.0f)
-                delay(400) // Ensure full syllable tail is completely heard!
+                // Reinforce English target word with full pronunciation and room to echo
+                speakEnglishPromptAndWait("Great job! ... $targetEnglish!")
+                delay(400)
 
                 onComplete()
             } catch (_: CancellationException) {
